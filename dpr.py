@@ -2,33 +2,42 @@
 
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 import torch
+from torch.utils.data import Dataset
+import random
 
+# taken from sentence transformers example by modified
+class MSMARCODataset(Dataset):
+    def __init__(self, queries, corpus, tokenizer_dir = "johngiorgi/declutr-base"):
+        self.queries = queries
+        self.queries_ids = list(queries.keys())
+        self.corpus = corpus
+        self.tok = AutoTokenizer.from_pretrained(tokenizer_dir)
 
-class DPR_Dataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir, tokenizer_dir = "johngiorgi/declutr-base", max_len=512):
-        self.data_dir = data_dir
-        self.tokenizer = AutoTokenizer(tokenizer_dir)
-        self.max_len = max_len
+        for qid in self.queries:
+            self.queries[qid]['pos'] = list(self.queries[qid]['pos'])
+            self.queries[qid]['neg'] = list(self.queries[qid]['neg'])
+            random.shuffle(self.queries[qid]['neg'])
 
-        self.data = []
-        self.load_data()
-    
-    def load_data(self):
-        pass
+    def __getitem__(self, item):
+        query = self.queries[self.queries_ids[item]]
+        query_text = query['query']
+
+        pos_id = query['pos'].pop(0)    #Pop positive and add at end
+        pos_text = self.corpus[pos_id]
+        query['pos'].append(pos_id)
+
+        neg_id = query['neg'].pop(0)    #Pop negative and add at end
+        neg_text = self.corpus[neg_id]
+        query['neg'].append(neg_id)
+
+        return {
+            'anchor': self.tok(query_text, return_tensors='pt'),
+            'positive': self.tok(pos_text, return_tensors='pt'),
+            'negative': self.tok(neg_text, return_tensors='pt'),
+        }
 
     def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        # elem is a lot of strings, where the first example if the anchor, second is the positive, and the rest are negatives
-        elem = self.data[index]
-        # tokenize elem
-        elem = self.tokenizer.encode(elem, max_length=self.max_len, return_tensors="pt")
-        return {
-            "anchor": elem[0],
-            "positive": elem[1],
-            "negative": elem[2:]
-        }
+        return len(self.queries)
 
 class DPR(torch.nn.Module):
     def __init__(self, project_dim = 300):
@@ -53,13 +62,21 @@ class DPR(torch.nn.Module):
         positive = self.projection(positive)
         negative = self.projection(negative)
 
-        # positive is dimension bs x projection_dim, negative is bs x cbs - 1 x projection_dim
-        # so unsqueeze positive and concat it onto negatives
-        contrastive_batch = torch.cat((positive.unsqueeze(1), negative), dim=1)
+        # positive is dimension bs x projection_dim, negative is bs x projection_dim
+        # What we want to do is concat positives onto negatives, but on the ith negative do not concat the ith positive
+        # we can do this by duplicaating positive by bs 
+        positives_duplicated = torch.cat([positive.unsqueeze(1)] * positive.shape[0], dim=1)
+        # and then on the second dimension on the ith index, we replace it with the ith negative
+        contrastive_batch = torch.scatter(positive, 1, torch.arange(positive.shape[0]).unsqueeze(1), negatives) # ~ bs x bs x projection_dim
+        # concat positives onto the contrastive batch
+        contrastive_batch = torch.cat([positive.unsqueeze(1), contrastive_batch], dim=1)
+
 
         # compute the cosine sim of the anchor and the contrastive batch.
-        # anchor is bs x projection_dim, contrastive_batch is bs x cbs x projection_dim
+        # anchor is bs x projection_dim, contrastive_batch is bs x bs+1 x projection_dim
         # so we can do a matrix multiplication
         sim = torch.matmul(anchor, contrastive_batch.transpose(1,2))
+
+        return sim
 
 
