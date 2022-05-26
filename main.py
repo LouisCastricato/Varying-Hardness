@@ -42,7 +42,7 @@ def train(model, dataloader, epochs = 10, update_every=10):
     model.train()
     optim = torch.optim.Adam(model.parameters(), lr=0.001)
     for _ in (pbar := tqdm(range(epochs))):
-        for idx, batch in enumerate(dataloader):
+        for idx, batch in tqdm(enumerate(dataloader)):
             loss = torch.mean(model(batch)[0])
             loss.backward()
             optim.step()
@@ -51,10 +51,6 @@ def train(model, dataloader, epochs = 10, update_every=10):
             if idx % update_every == 0:
                 pbar.set_description(f"Loss: {loss.item():.4f}")
 
-
-        
-
-
 if __name__ == "__main__":
     # load the train file
     with open(os.path.join(data_folder, args.train_file), 'r') as f:
@@ -62,7 +58,7 @@ if __name__ == "__main__":
     
     # initialize the dataset
     dataset = MSMARCODataset(train_data, corpus)
-    dataloader = DataLoader(dataset, batch_size=100, shuffle=True, num_workers=4)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4)
 
     train(DPR(), dataloader)
 
