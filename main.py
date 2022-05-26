@@ -62,7 +62,7 @@ if __name__ == "__main__":
     
     # initialize the dataset
     dataset = MSMARCODataset(train_data, corpus)
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=4)
+    dataloader = DataLoader(dataset, batch_size=100, shuffle=True, num_workers=4)
 
     train(DPR(), dataloader)
 

@@ -102,8 +102,7 @@ class DPR(torch.nn.Module):
         # so we can do a matrix multiplication
         sim = -torch.nn.functional.log_softmax(torch.matmul(anchor.unsqueeze(1), contrastive_batch.transpose(1,2)).squeeze(), dim=1)
 
-        # for the ith batch, return the ith component
-        to_reduce = torch.zeros_like(sim).to(sim)
-        to_reduce.scatter_(1, torch.arange(sim.shape[1]).unsqueeze(0).to(sim), sim)
+        # for the ith batch, get the ith component
+        # sim is bs x bs+1
+        return torch.trace(sim) / sim.shape[0], sim
 
-        return torch.sum(to_reduce), sim
