@@ -37,16 +37,18 @@ with open(collection_filepath, 'r', encoding='utf8') as fIn:
         pid = int(pid)
         corpus[pid] = passage
 
-def train(model, dataloader, epochs = 10, update_every=10):
+def train(model, dataloader, epochs = 10, update_every=10, grad_accum=3):
     model.to('cuda')
     model.train()
-    optim = torch.optim.Adam(model.parameters(), lr=0.001)
+    optim = torch.optim.Adam(model.parameters(), lr=5e-4)
     for _ in (pbar := tqdm(range(epochs))):
         for idx, batch in tqdm(enumerate(dataloader)):
-            loss = torch.mean(model(batch)[0])
+            loss = model(batch)[0]
             loss.backward()
-            optim.step()
-            optim.zero_grad()
+            
+            if idx % grad_accum == 0:
+                optim.step()
+                optim.zero_grad()
 
             if idx % update_every == 0:
                 pbar.set_description(f"Loss: {loss.item():.4f}")

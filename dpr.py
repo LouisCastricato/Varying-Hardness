@@ -94,7 +94,7 @@ class DPR(torch.nn.Module):
         negative = self.projection(negative)
 
         # positive is dimension bs x projection_dim, negative is bs x projection_dim
-        positives_duplicated = torch.cat([positive.unsqueeze(1)] * positive.shape[0], dim=1)
+        positives_duplicated = torch.cat([positive.unsqueeze(1)] * positive.shape[0], dim=1).transpose(0,1)
         contrastive_batch = torch.cat([positives_duplicated, negative.unsqueeze(1)], dim=1)
 
         # compute the cosine sim of the anchor and the contrastive batch.
