@@ -1,6 +1,7 @@
 from dpr import MSMARCODataset, DPR
 
 import argparse
+from get_embeds import get_embeds
 import json
 import logging
 import os
@@ -37,7 +38,7 @@ with open(collection_filepath, 'r', encoding='utf8') as fIn:
         pid = int(pid)
         corpus[pid] = passage
 
-def train(model, dataloader, epochs = 10, update_every=10, grad_accum=3):
+def train(model, dataloader, tokenize_func, epochs = 10, update_every=10, grad_accum=3, get_emebds_every=1000):
     model.to('cuda')
     model.train()
     optim = torch.optim.Adam(model.parameters(), lr=5e-4)
@@ -53,6 +54,12 @@ def train(model, dataloader, epochs = 10, update_every=10, grad_accum=3):
             if idx % update_every == 0:
                 pbar.set_description(f"Loss: {loss.item():.4f}")
 
+            if idx % get_emebds_every == 0:
+                model.eval()
+                with torch.no_grad():
+                    get_embeds(model, tokenize_func, save_to_dir=f"embeds/{_}_{idx}")
+                model.train()
+
 if __name__ == "__main__":
     # load the train file
     with open(os.path.join(data_folder, args.train_file), 'r') as f:
@@ -62,5 +69,5 @@ if __name__ == "__main__":
     dataset = MSMARCODataset(train_data, corpus)
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4)
 
-    train(DPR(), dataloader)
+    train(DPR(), dataloader, dataset.tokenize)
 
