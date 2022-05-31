@@ -44,7 +44,7 @@ def get_embeds(model, tokenize_func : Callable, save_to_dir : str):
     passage_embeddings = []
 
     bs = int(10)
-    N = int(1e5)
+    N = int(1e4)
     for i in tqdm(range(0, N, bs)):
         batch = dataset['validation'][i:i+bs]
         
@@ -61,7 +61,7 @@ def get_embeds(model, tokenize_func : Callable, save_to_dir : str):
             # embed. we need to convert the first two to a list so that we can expand below
             batch_queries_tensors = model.embed(**prepare_data(batch_queries)).tolist()
             batch_answers_tensors = model.embed(**prepare_data(batch_answers)).tolist()
-            passage_embeddings.append(model.embed(**prepare_data(batch_passages)))
+            passage_embeddings.append(model.embed(**prepare_data(batch_passages)).cpu())
 
         # expand batch queries and batch answers to the size of batch passages
         e_queries = []; [e_queries := e_queries + [q] * len(b) for q, b in zip(batch_queries_tensors, batch_passages)]
@@ -78,6 +78,10 @@ def get_embeds(model, tokenize_func : Callable, save_to_dir : str):
     answer_embeddings = np.concatenate(answer_embeddings, axis=0)
     passage_embeddings = np.concatenate(passage_embeddings, axis=0)
 
+    # check if save_to_dir exists, if not create it
+    if not os.path.exists(save_to_dir):
+        os.makedirs(save_to_dir)
+        
     base_path = os.path.join(save_to_dir, 'ms_marco_')
     np.save(base_path + 'query_embeddings_v1.npy', query_embeddings)
     np.save(base_path + 'answer_embeddings_v1.npy', answer_embeddings)
