@@ -63,6 +63,10 @@ def get_embeds(model, tokenize_func : Callable, save_to_dir : str):
             batch_answers_tensors = model.embed(**prepare_data(batch_answers)).tolist()
             passage_embeddings.append(model.embed(**prepare_data(batch_passages)).cpu())
 
+        # append to no dupe
+        query_embeddings_no_dupe.append(np.array(batch_queries_tensors))
+        answer_embeddings_no_dupe.append(np.array(batch_answers_tensors))
+
         # expand batch queries and batch answers to the size of batch passages
         e_queries = []; [e_queries := e_queries + [q] * len(b) for q, b in zip(batch_queries_tensors, batch_passages)]
         e_answers = []; [e_answers := e_answers + [a] * len(b) for a, b in zip(batch_answers_tensors, batch_passages)]
@@ -83,7 +87,11 @@ def get_embeds(model, tokenize_func : Callable, save_to_dir : str):
         os.makedirs(save_to_dir)
         
     base_path = os.path.join(save_to_dir, 'ms_marco_')
+
     np.save(base_path + 'query_embeddings_v1.npy', query_embeddings)
     np.save(base_path + 'answer_embeddings_v1.npy', answer_embeddings)
     np.save(base_path + 'passage_embeddings_v1.npy', passage_embeddings)
+
+    np.save(base_path + 'query_embeddings_no_dupe_v1.npy', query_embeddings_no_dupe)
+    np.save(base_path + 'answer_embeddings_no_dupe_v1.npy', answer_embeddings_no_dupe)
 

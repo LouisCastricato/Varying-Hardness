@@ -67,36 +67,13 @@ class DPR(torch.nn.Module):
         if attn_mask is None:
             attn_mask = torch.ones(embeds.shape[:2], dtype=torch.int)
         return masked_average(embds, attn_mask)
-
-    def forward(self, x):
+    def loss(self, anchor, contrastive_batch):
         """
-        Computes a forward step of DPR. Does not compute loss. To compute loss, take the NLL of the 0th component.
-        :param x: a dictionary of tensors, where the keys are "anchor", "positive", and "negative"
-        :return: A tensor of bs x cbs, where dimension [:,0] should be minimized
+        Compute InfoNCE
+        :param anchor: anchor embeddings
+        :param contrastive_batch: batch of contrastive embeddings
+        :return:
         """
-        for k,v in x.items():
-            x[k] = v.to("cuda")
-
-        # adjust the batch size to compensate for lost efficiency here
-        anchor = self.lm(x["anchor_inputs"].squeeze()).hidden_states[0]
-        positive = self.lm(x["positive_inputs"].squeeze()).hidden_states[0]
-        negative = self.lm(x["negative_inputs"].squeeze()).hidden_states[0]
-
-
-
-        anchor = masked_average(anchor, x["anchor_attn_mask"])
-        positive = masked_average(positive, x["positive_attn_mask"])
-        negative = masked_average(negative, x["negative_attn_mask"])
-
-        # project the embeddings
-        anchor = self.projection(anchor)
-        positive = self.projection(positive)
-        negative = self.projection(negative)
-
-        # positive is dimension bs x projection_dim, negative is bs x projection_dim
-        positives_duplicated = torch.cat([positive.unsqueeze(1)] * positive.shape[0], dim=1).transpose(0,1)
-        contrastive_batch = torch.cat([positives_duplicated, negative.unsqueeze(1)], dim=1)
-
         # compute the cosine sim of the anchor and the contrastive batch.
         # anchor is bs x projection_dim, contrastive_batch is bs x bs+1 x projection_dim
         # so we can do a matrix multiplication
@@ -105,4 +82,60 @@ class DPR(torch.nn.Module):
         # for the ith batch, get the ith component
         # sim is bs x bs+1
         return torch.trace(sim) / sim.shape[0], sim
+
+    def forward(self, x, accumulate = True, mbs = 32):
+        """
+        Computes a forward step of DPR. Does not compute loss. To compute loss, take the NLL of the 0th component.
+        :param x: a dictionary of tensors, where the keys are "anchor", "positive", and "negative"
+        :param accumulate: whether to accumulate the gradients. skips microbatching
+        :return: A tensor of bs x cbs, where dimension [:,0] should be minimized
+        """
+        for k,v in x.items():
+            x[k] = v.to("cuda")
+        # microbatch over the batch dimension
+        anchor_batch = list()
+        pos_batch = list()
+        neg_batch = list()
+        
+        bs = x['anchor_inputs'].shape[0]
+        for mbs_idx in range(0, bs, mbs):
+            # get input ids for the anchor, positive, and negative
+            anchor_inputs_mb  = x['anchor_inputs'][mbs_idx:mbs_idx+mbs]
+            positive_inputs_mb = x['positive_inputs'][mbs_idx:mbs_idx+mbs]
+            negative_inputs_mb = x['negative_inputs'][mbs_idx:mbs_idx+mbs]
+
+            # incase bs is one
+            try:
+                # forward pass
+                anchor_i  = self.lm(anchor_inputs_mb.squeeze()).hidden_states[0]
+                positive_i = self.lm(positive_inputs_mb.squeeze()).hidden_states[0]
+                negative_i = self.lm(negative_inputs_mb.squeeze()).hidden_states[0]
+            except:
+                continue
+
+            # projeect
+            anchor_i = self.projection(anchor_i)
+            positive_i = self.projection(positive_i)
+            negative_i = self.projection(negative_i)
+
+            # average
+            anchor_batch.append(masked_average(anchor_i, x['anchor_attn_mask'][mbs_idx:mbs_idx+mbs]))
+            pos_batch.append(masked_average(positive_i, x['positive_attn_mask'][mbs_idx:mbs_idx+mbs]))
+            neg_batch.append(masked_average(negative_i, x['negative_attn_mask'][mbs_idx:mbs_idx+mbs]))
+
+        # stack the mbs above
+        anchor = torch.stack(anchor_batch).view(-1, self.project_dim)
+        positive = torch.stack(pos_batch).view(-1, self.project_dim)
+        negative = torch.stack(neg_batch).view(-1, self.project_dim)
+        
+        # positive is dimension bs x projection_dim, negative is bs x projection_dim
+        positives_duplicated = torch.cat([positive.unsqueeze(1)] * positive.shape[0], dim=1).transpose(0,1)
+        contrastive_batch = torch.cat([positives_duplicated, negative.unsqueeze(1)], dim=1)
+
+        # if we want to skip microbatching
+        if accumulate:
+            return self.loss(anchor, contrastive_batch)
+        else:
+            # compute loss in the training loop rather than here
+            return anchor, contrastive_batch
 
