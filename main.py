@@ -4,10 +4,12 @@ import argparse
 from get_embeds import get_embeds
 import json
 import logging
+import numpy as np
 import os
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
 
 # set up our arguments
 parser = argparse.ArgumentParser()
@@ -38,10 +40,10 @@ with open(collection_filepath, 'r', encoding='utf8') as fIn:
         pid = int(pid)
         corpus[pid] = passage
 
-def train(model, dataloader, tokenize_func, epochs = 10, update_every=10, grad_accum=3, get_emebds_every=1000, mbs = 2):
+def train(model, dataloader, tokenize_func, epochs = 3, update_every=10, grad_accum=1, get_emebds_every=100, mbs = 2):
     model.to('cuda')
     model.train()
-    optim = torch.optim.Adam(model.parameters(), lr=5e-4)
+    optim = torch.optim.Adam(model.parameters(), lr=5e-5)
     for epoch in (pbar := tqdm(range(epochs))):
         for idx, batch in tqdm(enumerate(dataloader)):
             loss, _ = model(batch, accumulate=True, mbs=mbs)
@@ -62,13 +64,19 @@ def train(model, dataloader, tokenize_func, epochs = 10, update_every=10, grad_a
                 model.train()
 
 if __name__ == "__main__":
+
+    # set the seed 
+    torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
+    np.random.seed(42)
+
     # load the train file
     with open(os.path.join(data_folder, args.train_file), 'r') as f:
         train_data = json.load(f)
     
     # initialize the dataset
     dataset = MSMARCODataset(train_data, corpus)
-    dataloader = DataLoader(dataset, batch_size=128, shuffle=True, num_workers=4)
+    dataloader = DataLoader(dataset, batch_size=512, shuffle=True, num_workers=4)
 
     train(DPR(), dataloader, dataset.tokenize)
 

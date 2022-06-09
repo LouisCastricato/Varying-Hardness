@@ -59,9 +59,9 @@ def get_embeds(model, tokenize_func : Callable, save_to_dir : str):
 
         with torch.no_grad():
             # embed. we need to convert the first two to a list so that we can expand below
-            batch_queries_tensors = model.embed(**prepare_data(batch_queries)).tolist()
-            batch_answers_tensors = model.embed(**prepare_data(batch_answers)).tolist()
-            passage_embeddings.append(model.embed(**prepare_data(batch_passages)).cpu())
+            batch_queries_tensors = model.embed_query(**prepare_data(batch_queries)).tolist()
+            batch_answers_tensors = model.embed_passage(**prepare_data(batch_answers)).tolist()
+            passage_embeddings.append(model.embed_passage(**prepare_data(batch_passages)).cpu())
 
         # append to no dupe
         query_embeddings_no_dupe.append(np.array(batch_queries_tensors))

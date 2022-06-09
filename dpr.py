@@ -59,14 +59,24 @@ class DPR(torch.nn.Module):
     def __init__(self, project_dim = 768):
         super(DPR, self).__init__()
         self.project_dim = project_dim
-        self.lm = AutoModelForMaskedLM.from_pretrained("johngiorgi/declutr-base")
-        self.projection = torch.nn.Linear(self.project_dim, self.project_dim)
+        self.passage_lm = AutoModelForMaskedLM.from_pretrained("johngiorgi/declutr-base")
+        self.passage_projection = torch.nn.Linear(self.project_dim, self.project_dim)
+        
+        self.query_lm = AutoModelForMaskedLM.from_pretrained("johngiorgi/declutr-base")
+        self.query_projection = torch.nn.Linear(self.project_dim, self.project_dim)
 
-    def embed(self, toks, attn_mask=None):
-        embds = self.lm(toks.squeeze()).hidden_states[0]
+    def embed_passage(self, toks, attn_mask=None):
+        embds = self.passage_lm(toks.squeeze()).hidden_states[0]
         if attn_mask is None:
             attn_mask = torch.ones(embeds.shape[:2], dtype=torch.int)
         return masked_average(embds, attn_mask)
+        
+    def embed_query(self, toks, attn_mask=None):
+        embds = self.query_lm(toks.squeeze()).hidden_states[0]
+        if attn_mask is None:
+            attn_mask = torch.ones(embeds.shape[:2], dtype=torch.int)
+        return masked_average(embds, attn_mask)
+
     def loss(self, anchor, contrastive_batch):
         """
         Compute InfoNCE
@@ -107,16 +117,16 @@ class DPR(torch.nn.Module):
             # incase bs is one
             try:
                 # forward pass
-                anchor_i  = self.lm(anchor_inputs_mb.squeeze()).hidden_states[0]
-                positive_i = self.lm(positive_inputs_mb.squeeze()).hidden_states[0]
-                negative_i = self.lm(negative_inputs_mb.squeeze()).hidden_states[0]
+                anchor_i  = self.query_lm(anchor_inputs_mb.squeeze()).hidden_states[0]
+                positive_i = self.passage_lm(positive_inputs_mb.squeeze()).hidden_states[0]
+                negative_i = self.passage_lm(negative_inputs_mb.squeeze()).hidden_states[0]
             except:
                 continue
 
             # projeect
-            anchor_i = self.projection(anchor_i)
-            positive_i = self.projection(positive_i)
-            negative_i = self.projection(negative_i)
+            anchor_i = self.query_projection(anchor_i)
+            positive_i = self.passage_projection(positive_i)
+            negative_i = self.passage_projection(negative_i)
 
             # average
             anchor_batch.append(masked_average(anchor_i, x['anchor_attn_mask'][mbs_idx:mbs_idx+mbs]))
