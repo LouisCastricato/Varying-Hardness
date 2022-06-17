@@ -11,7 +11,7 @@ from typing import Iterable, Callable
 dataset = load_dataset("ms_marco", 'v2.1')
 
 def preperation_factory(tokenize_func: Callable) -> Callable:
-    def prepare_data(strings: Iterable[str]) -> dict:
+    def prepare_data(strings: Iterable[str], prefix : str = "") -> dict:
         """
         Prepares data for the model.
         :param: strings are the strings to be tokenized
@@ -21,66 +21,55 @@ def preperation_factory(tokenize_func: Callable) -> Callable:
         x = tokenize_func(collapsed_text)
         sequence_length = x.input_ids.shape[-1]
         return {
-            'toks' : x.input_ids.to('cuda').view(-1, sequence_length).squeeze(),
-            'attn_mask' : x.attention_mask.to('cuda').view(-1, sequence_length).squeeze(),
+            prefix+'_inputs' : x.input_ids.to('cuda').view(-1, sequence_length).squeeze(),
+            prefix+'_attn_mask' : x.attention_mask.to('cuda').view(-1, sequence_length).squeeze(),
         }
     return prepare_data
 
-def get_embeds(model, tokenize_func : Callable, save_to_dir : str):
+def get_embeds(model, tokenize_func : Callable, save_to_dir : str, dataloader : torch.utils.data.DataLoader, mbs : int = 4):
     """
     Get embeddings for all queries in the dataset. Saves to npy file.
     :param: model refers to the DPR model
     :param: tokenize_func is a function that takes a string and returns a list of tokens
     :param: save_to_dir is the directory to save the embeddings to
     """
-    # get the data preperation function
-    prepare_data = preperation_factory(tokenize_func)
-
     # for every batch in ms marco, embed it using the model
-    query_embeddings = []
-    query_embeddings_no_dupe = []
-    answer_embeddings = []
-    answer_embeddings_no_dupe = []
-    passage_embeddings = []
+    positive_embeddings = []
+    negative_embeddings = []
+    anchor_embeddings = []
+    accuracy = []
+    loss = []
 
     bs = int(10)
     N = int(1e4)
-    for i in tqdm(range(0, N, bs)):
-        batch = dataset['validation'][i:i+bs]
-        
-        # get only the queries from the batch
-        batch_queries = list(collapse([q for q in batch['query']]))
+    for batch in tqdm(dataloader, total=len(dataloader)):
+        try:
+            with torch.no_grad():
+                out_dict = model(batch, mbs=mbs, return_embeddings=True)
 
-        # get only the answers from the batch
-        batch_answers = list(collapse([a for a in batch['answers']]))
+            batch_positive_tensors = out_dict['positive'].cpu().numpy()
+            batch_negative_tensors = out_dict['negative'].cpu().numpy()
+            batch_anchor_tensors = out_dict['anchor'].cpu().numpy()
 
-        # get only the passages from the batch
-        batch_passages = [p['passage_text'] for p in batch['passages']]
+            accuracy.append(out_dict['acc'])
+            loss.append(out_dict['loss'].item())
+            
+            # append to the list of embeddings
+            positive_embeddings.append(batch_positive_tensors[None, ...])
+            negative_embeddings.append(batch_negative_tensors[None, ...])
+            anchor_embeddings.append(batch_anchor_tensors[None, ...])
+        except:
+            continue
 
-        with torch.no_grad():
-            # embed. we need to convert the first two to a list so that we can expand below
-            batch_queries_tensors = model.embed_query(**prepare_data(batch_queries)).tolist()
-            batch_answers_tensors = model.embed_passage(**prepare_data(batch_answers)).tolist()
-            passage_embeddings.append(model.embed_passage(**prepare_data(batch_passages)).cpu())
-
-        # append to no dupe
-        query_embeddings_no_dupe.append(np.array(batch_queries_tensors))
-        answer_embeddings_no_dupe.append(np.array(batch_answers_tensors))
-
-        # expand batch queries and batch answers to the size of batch passages
-        e_queries = []; [e_queries := e_queries + [q] * len(b) for q, b in zip(batch_queries_tensors, batch_passages)]
-        e_answers = []; [e_answers := e_answers + [a] * len(b) for a, b in zip(batch_answers_tensors, batch_passages)]
-        
-        # append to the list of embeddings. convert back to a numpy array too
-        query_embeddings.append(np.array(e_queries))
-        answer_embeddings.append(np.array(e_answers))
-
+    # average both accuracy and loss
+    accuracy =  sum(accuracy) / float(len(accuracy))
+    loss = sum(loss) / float(len(loss))
 
 
     # save embeddings to an npy
-    query_embeddings = np.concatenate(query_embeddings, axis=0)
-    answer_embeddings = np.concatenate(answer_embeddings, axis=0)
-    passage_embeddings = np.concatenate(passage_embeddings, axis=0)
+    positive_embeddings = np.concatenate(positive_embeddings[:-1], axis=0)
+    negative_embeddings = np.concatenate(negative_embeddings[:-1], axis=0)
+    anchor_embeddings = np.concatenate(anchor_embeddings[:-1], axis=0)
 
     # check if save_to_dir exists, if not create it
     if not os.path.exists(save_to_dir):
@@ -88,10 +77,9 @@ def get_embeds(model, tokenize_func : Callable, save_to_dir : str):
         
     base_path = os.path.join(save_to_dir, 'ms_marco_')
 
-    np.save(base_path + 'query_embeddings_v1.npy', query_embeddings)
-    np.save(base_path + 'answer_embeddings_v1.npy', answer_embeddings)
-    np.save(base_path + 'passage_embeddings_v1.npy', passage_embeddings)
+    np.save(base_path + 'positive_embeddings.npy', positive_embeddings)
+    np.save(base_path + 'negative_embeddings.npy', negative_embeddings)
+    np.save(base_path + 'anchor_embeddings.npy', anchor_embeddings)
 
-    np.save(base_path + 'query_embeddings_no_dupe_v1.npy', query_embeddings_no_dupe)
-    np.save(base_path + 'answer_embeddings_no_dupe_v1.npy', answer_embeddings_no_dupe)
+    return accuracy, loss
 

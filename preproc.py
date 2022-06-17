@@ -40,7 +40,7 @@ logging.basicConfig(format='%(asctime)s - %(message)s',
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--negs_to_use", default=None, help="From which systems should negatives be used? Multiple systems seperated by comma. None = all")
-parser.add_argument("--num_negs_per_system", default=128, type=int)
+parser.add_argument("--num_negs_per_system", default=5, type=int)
 parser.add_argument("--use_all_queries", default=False, action="store_true")
 parser.add_argument("--ce_score_margin", default=3.0, type=float)
 args = parser.parse_args()
@@ -164,7 +164,16 @@ def set_default(obj):
         return list(obj)
     raise TypeError
 
+# take the last 5% of train_queries as the eval set 
+eval_queries = {k: v for k, v in list(train_queries.items())[-int(len(train_queries.keys()) * 0.025):]}
+train_queries = {k: v for k, v in list(train_queries.items())[:-int(len(train_queries.keys()) * 0.025)]}
+
 # save train_queries to a JSON file
 train_queries_filepath = os.path.join(data_folder, 'train_queries_' + str(ce_score_margin) + '_.json')
 with open(train_queries_filepath, 'w', encoding='utf8') as fOut:
     json.dump(train_queries, fOut, indent=4, ensure_ascii=False, default=set_default)
+
+eval_queries_filepath = os.path.join(data_folder, 'eval_queries_' + str(ce_score_margin) + '_.json')
+with open(eval_queries_filepath, 'w', encoding='utf8') as fOut:
+    json.dump(eval_queries, fOut, indent=4, ensure_ascii=False, default=set_default)
+

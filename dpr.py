@@ -1,14 +1,31 @@
 # this file implements the dataset and model class for dpr using declutr
 
+import numpy as np
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 import torch
 from torch.utils.data import Dataset
 import random
+from scipy.special import softmax
+
 
 def masked_average(out, mask):
     mask = mask.squeeze()
     return torch.sum(out * mask.unsqueeze(-1), dim=1) / torch.clamp(
     torch.sum(mask, dim=1, keepdims=True), min=1e-9)
+
+def compute_accuracy(contrastive_matrix):
+    """
+    :param contrastive_matrix: an nxn matrix
+    :return: accuracy (scalar from 0 to 1)
+    """
+    contrastive_matrix_i = np.argmax(softmax(contrastive_matrix, axis=0), axis=0).tolist()
+    contrastive_matrix_j = np.argmax(softmax(contrastive_matrix, axis=1), axis=1).tolist()
+
+    labels = list(range(contrastive_matrix.shape[0]))
+    acc_i = np.mean([contrastive_matrix_i[i] == labels[i] for i in range(len(labels))])
+    acc_j = np.mean([contrastive_matrix_j[i] == labels[i] for i in range(len(labels))])
+
+    return (acc_i + acc_j) / 2.
 
 # taken from sentence transformers example and modified
 class MSMARCODataset(Dataset):
@@ -68,13 +85,13 @@ class DPR(torch.nn.Module):
     def embed_passage(self, toks, attn_mask=None):
         embds = self.passage_lm(toks.squeeze()).hidden_states[0]
         if attn_mask is None:
-            attn_mask = torch.ones(embeds.shape[:2], dtype=torch.int)
+            attn_mask = torch.ones(embds.shape[:2], dtype=torch.int)
         return masked_average(embds, attn_mask)
         
     def embed_query(self, toks, attn_mask=None):
         embds = self.query_lm(toks.squeeze()).hidden_states[0]
         if attn_mask is None:
-            attn_mask = torch.ones(embeds.shape[:2], dtype=torch.int)
+            attn_mask = torch.ones(embds.shape[:2], dtype=torch.int)
         return masked_average(embds, attn_mask)
 
     def loss(self, anchor, contrastive_batch):
@@ -87,17 +104,22 @@ class DPR(torch.nn.Module):
         # compute the cosine sim of the anchor and the contrastive batch.
         # anchor is bs x projection_dim, contrastive_batch is bs x bs+1 x projection_dim
         # so we can do a matrix multiplication
-        sim = -torch.nn.functional.log_softmax(torch.matmul(anchor.unsqueeze(1), contrastive_batch.transpose(1,2)).squeeze(), dim=1)
+        contrastive_matrix = torch.matmul(anchor.unsqueeze(1), contrastive_batch.transpose(1,2)).squeeze()
+        accuracy = compute_accuracy(contrastive_matrix.cpu().detach().numpy())
+
+        sim = -torch.nn.functional.log_softmax(contrastive_matrix, dim=1)
 
         # for the ith batch, get the ith component
         # sim is bs x bs+1
-        return torch.trace(sim) / sim.shape[0], sim
+        return {
+            'loss': torch.trace(sim) / sim.shape[0],
+            'acc': accuracy
+        }
 
-    def forward(self, x, accumulate = True, mbs = 32):
+    def forward(self, x, mbs = 32, return_embeddings = False):
         """
         Computes a forward step of DPR. Does not compute loss. To compute loss, take the NLL of the 0th component.
         :param x: a dictionary of tensors, where the keys are "anchor", "positive", and "negative"
-        :param accumulate: whether to accumulate the gradients. skips microbatching
         :return: A tensor of bs x cbs, where dimension [:,0] should be minimized
         """
         for k,v in x.items():
@@ -137,15 +159,23 @@ class DPR(torch.nn.Module):
         anchor = torch.stack(anchor_batch).view(-1, self.project_dim)
         positive = torch.stack(pos_batch).view(-1, self.project_dim)
         negative = torch.stack(neg_batch).view(-1, self.project_dim)
+
         
-        # positive is dimension bs x projection_dim, negative is bs x projection_dim
+
+        if return_embeddings:
+            embedding_dict = {
+                'anchor': anchor,
+                'positive': positive,
+                'negative': negative
+            }
+
+
         positives_duplicated = torch.cat([positive.unsqueeze(1)] * positive.shape[0], dim=1).transpose(0,1)
+        # positive is dimension bs x projection_dim, negative is bs x projection_dim
         contrastive_batch = torch.cat([positives_duplicated, negative.unsqueeze(1)], dim=1)
 
-        # if we want to skip microbatching
-        if accumulate:
-            return self.loss(anchor, contrastive_batch)
-        else:
-            # compute loss in the training loop rather than here
-            return anchor, contrastive_batch
+        output_dict = self.loss(anchor, contrastive_batch)
+        if return_embeddings:
+            output_dict.update(embedding_dict)
 
+        return output_dict
