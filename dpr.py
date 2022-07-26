@@ -1,5 +1,6 @@
 # this file implements the dataset and model class for dpr using declutr
-
+import json
+from datasets import load_dataset
 import numpy as np
 from transformers import AutoTokenizer, AutoModelForMaskedLM
 import torch
@@ -72,14 +73,57 @@ class MSMARCODataset(Dataset):
     def __len__(self):
         return len(self.queries)
 
+# taken from sentence transformers example and modified
+class WikiNQDataset(Dataset):
+    def __init__(self, negatives_file, tokenizer_dir = "johngiorgi/declutr-base", max_length=512):
+        self.tok = AutoTokenizer.from_pretrained(tokenizer_dir)
+        self.max_length = max_length
+
+        # load a jsonl from negatives file
+        self.data = []
+        with open(negatives_file, 'r') as f:
+            for line in f:
+                self.data.append(json.loads(line))
+
+        self.wiki = load_dataset('wiki_dpr', 'psgs_w100.nq.no_index', split='train')
+
+    def tokenize(self, text):
+        return self.tok(text,
+            return_tensors='pt',
+            max_length=self.max_length, 
+            truncation=True, 
+            padding='max_length')
+
+    def __getitem__(self, idx):
+        query = self.data[idx]['question']
+        query_text = self.tokenize(query['query'])
+
+        pos_id = self.data[idx]['answwer']
+        pos_text = self.tokenize(self.corpus[pos_id])
+
+        neg_id = self.wiki[self.nqself.data[idx]['hard_negative']-1]['text']
+        neg_text = self.tokenize(self.corpus[neg_id])
+
+        return {
+            'anchor_inputs': query_text.input_ids,
+            'anchor_attn_mask' : query_text.attention_mask,
+            'positive_inputs' : pos_text.input_ids,
+            'positive_attn_mask' : pos_text.attention_mask,
+            'negative_inputs' : neg_text.input_ids,
+            'negative_attn_mask' : neg_text.attention_mask,
+        }
+
+    def __len__(self):
+        return len(self.queries)
+
 class DPR(torch.nn.Module):
     def __init__(self, project_dim = 768):
         super(DPR, self).__init__()
         self.project_dim = project_dim
-        self.passage_lm = AutoModelForMaskedLM.from_pretrained("johngiorgi/declutr-base")
+        self.passage_lm = AutoModelForMaskedLM.from_pretrained("roberta-base")
         self.passage_projection = torch.nn.Linear(self.project_dim, self.project_dim)
         
-        self.query_lm = AutoModelForMaskedLM.from_pretrained("johngiorgi/declutr-base")
+        self.query_lm = AutoModelForMaskedLM.from_pretrained("roberta-base")
         self.query_projection = torch.nn.Linear(self.project_dim, self.project_dim)
 
     def embed_passage(self, toks, attn_mask=None):
@@ -137,14 +181,19 @@ class DPR(torch.nn.Module):
             negative_inputs_mb = x['negative_inputs'][mbs_idx:mbs_idx+mbs]
 
             # incase bs is one
+
+            # forward pass
             try:
-                # forward pass
-                anchor_i  = self.query_lm(anchor_inputs_mb.squeeze()).hidden_states[0]
-                positive_i = self.passage_lm(positive_inputs_mb.squeeze()).hidden_states[0]
-                negative_i = self.passage_lm(negative_inputs_mb.squeeze()).hidden_states[0]
+                anchor_shape = anchor_inputs_mb.shape
+                anchor_i = self.query_lm(anchor_inputs_mb.view(-1, anchor_shape[-1]), output_hidden_states=True).hidden_states[0]
+
+                pos_shape = positive_inputs_mb.shape
+                positive_i = self.passage_lm(positive_inputs_mb.view(-1, pos_shape[-1]), output_hidden_states=True).hidden_states[0]
+
+                neg_shape = negative_inputs_mb.shape
+                negative_i = self.passage_lm(negative_inputs_mb.view(-1, neg_shape[-1]), output_hidden_states=True).hidden_states[0]
             except:
                 continue
-
             # projeect
             anchor_i = self.query_projection(anchor_i)
             positive_i = self.passage_projection(positive_i)

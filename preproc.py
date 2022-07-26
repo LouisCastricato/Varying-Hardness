@@ -169,11 +169,20 @@ eval_queries = {k: v for k, v in list(train_queries.items())[-int(len(train_quer
 train_queries = {k: v for k, v in list(train_queries.items())[:-int(len(train_queries.keys()) * 0.025)]}
 
 # save train_queries to a JSON file
-train_queries_filepath = os.path.join(data_folder, 'train_queries_' + str(ce_score_margin) + '_.json')
-with open(train_queries_filepath, 'w', encoding='utf8') as fOut:
+filename = os.path.join(data_folder, 'train_queries_' + str(ce_score_margin))
+if args.num_negs_per_system != 5:
+    filename += '_' + str(args.num_negs_per_system)
+filename += '_.json'
+
+with open(filename, 'w', encoding='utf8') as fOut:
     json.dump(train_queries, fOut, indent=4, ensure_ascii=False, default=set_default)
 
-eval_queries_filepath = os.path.join(data_folder, 'eval_queries_' + str(ce_score_margin) + '_.json')
-with open(eval_queries_filepath, 'w', encoding='utf8') as fOut:
+    
+eval_filename = os.path.join(data_folder, 'eval_queries_' + str(ce_score_margin))
+if args.num_negs_per_system != 5:
+    eval_filename += '_' + str(args.num_negs_per_system)
+eval_filename += '_.json'
+
+with open(eval_filename, 'w', encoding='utf8') as fOut:
     json.dump(eval_queries, fOut, indent=4, ensure_ascii=False, default=set_default)
 

@@ -1,4 +1,4 @@
-from dpr import MSMARCODataset, DPR
+from dpr import MSMARCODataset, WikiNQDataset, DPR
 
 import argparse
 from get_embeds import get_embeds
@@ -14,13 +14,18 @@ import wandb
 # set up our arguments
 parser = argparse.ArgumentParser()
 parser.add_argument("--data_folder", type=str, default='msmarco-data', help="Path to the data folder")
-parser.add_argument("--train_file", type=str, default='train_queries_5.0_.json', help="File containing hard negatives.")
-parser.add_argument('--validation_file', type=str, default='eval_queries_5.0_.json', help="File containing hard negatives.")
-
+parser.add_argument("--train_file", type=str, default='train_queries_', help="File containing hard negatives.")
+parser.add_argument('--validation_file', type=str, default='eval_queries_', help="File containing hard negatives.")
+parser.add_argument('--hardness', type=float, default=2.0, help="Hardness of the negative sampling.")
+parser.add_argument('--num_negs', type=int, default=5, help="Number of negative samples to use.")
+parser.add_argument('--cuda_visible_device', type=str, default='0', help="CUDA visible device")
 args = parser.parse_args()
 
 print(args)
 data_folder = args.data_folder
+
+# set the cuda device
+os.environ['CUDA_VISIBLE_DEVICES'] = args.cuda_visible_device
 
 # load the corpus
 corpus = {}         #dict in the format: passage_id -> passage. Stores all existent passages
@@ -34,7 +39,7 @@ with open(collection_filepath, 'r', encoding='utf8') as fIn:
         corpus[pid] = passage
 
 def train(model, train_dataloader, validation_dataloader,
-    tokenize_func, epochs = 1, update_every=10, 
+    epochs = 1, update_every=10, 
     grad_accum=1, validate=100, mbs = 4):
 
     model.to('cuda')
@@ -42,19 +47,19 @@ def train(model, train_dataloader, validation_dataloader,
     optim = torch.optim.Adam(model.parameters(), lr=5e-5, weight_decay=1e-5)
     accuracies = list()
     losses = list()
-
+    count_total = len(train_dataloader) * epochs
+    count = 0
     for epoch in (pbar := tqdm(range(epochs))):
         for idx, batch in tqdm(enumerate(train_dataloader)):
-            try:
-                out_dict = model(batch, mbs=mbs)
-                loss = out_dict['loss']
-                acc = out_dict['acc']
 
-                wandb.log({'Train/Loss': loss, 'Train/Acc': acc})
+            out_dict = model(batch, mbs=mbs)
+            loss = out_dict['loss']
+            acc = out_dict['acc']
 
-                loss.backward()
-            except:
-                continue
+            wandb.log({'Train/Loss': loss, 'Train/Acc': acc})
+
+            loss.backward()
+            
             
             if (idx) % grad_accum == 0:
                 optim.step()
@@ -68,7 +73,7 @@ def train(model, train_dataloader, validation_dataloader,
                 model.eval()
                 print(f"Getting embeddings for embeds/{epoch}_{idx} and validating...")
                 with torch.no_grad():
-                    avg_acc, avg_loss = get_embeds(model, tokenize_func, save_to_dir=f"embeds/{epoch}_{idx}", dataloader=validation_dataloader)
+                    avg_acc, avg_loss = get_embeds(model, suffix=str(args.num_negs), save_identifier=str(float(count)/float(count_total)), dataloader=validation_dataloader)
 
                 wandb.log({'Val/Acc' : avg_acc, 'Val/Loss': avg_loss})
 
@@ -76,9 +81,10 @@ def train(model, train_dataloader, validation_dataloader,
                 losses.append(avg_loss)
 
                 # save accuracies and losses to a .npy
-                np.save(f"accuracies.npy", np.array(accuracies))
-                np.save(f"losses.npy", np.array(losses))
+                np.save(f"accuracies_"+str(args.num_negs)+".npy", np.array(accuracies))
+                np.save(f"losses_"+str(args.num_negs)+".npy", np.array(losses))
                 model.train()
+            count += 1
 
 if __name__ == "__main__":
 
@@ -86,25 +92,18 @@ if __name__ == "__main__":
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
     np.random.seed(42)
-
-    # load the train file
-    with open(os.path.join(data_folder, args.train_file), 'r') as f:
-        train_data = json.load(f)
     
-    with open(os.path.join(data_folder, args.validation_file), 'r') as f:
-        validation_data = json.load(f)
-    
-    wandb.init(project="varying hardness dpr msmarco", name="Hardness 5 Declutr B")
+    wandb.init(project="varying hardness dpr msmarco", name="Hardness " + str(args.hardness) + " Num Negs" + str(args.num_negs) + " Roberta B")
     wandb.config.update(args)
     
     # initialize the dataset
-    train_dataset = MSMARCODataset(train_data, corpus)
-    validation_dataset = MSMARCODataset(validation_data, corpus)
+    train_dataset = WikiNQDataset("wiki_dpr_full_es.jsonl", corpus)
+    validation_dataset = MSMARCODataset("wiki_dpr_full_es_val.jsonl", corpus)
     print(len(train_dataset))
     print(len(validation_dataset))
 
     train_dataloader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4)
     validation_dataloader = DataLoader(validation_dataset, batch_size=128, shuffle=True, num_workers=4)
 
-    train(DPR(), train_dataloader, validation_dataloader, train_dataset.tokenize)
+    train(DPR(), train_dataloader, validation_dataloader)
 
